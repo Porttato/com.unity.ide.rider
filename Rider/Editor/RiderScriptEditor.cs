@@ -124,9 +124,11 @@ namespace Packages.Rider.Editor
 
       GUILayout.EndHorizontal();
 
-      EditorGUILayout.LabelField("Generate .csproj files for:");
-      EditorGUI.indentLevel++;
-
+      EditorGUILayout.Space();
+      
+      if (m_ProjectConfig == null)
+        m_ProjectConfig = RiderProjectConfigStorage.Load();
+      
       var groupProjectsByName = EditorGUILayout.Toggle(new GUIContent("Group projects by name", "If enabled, projects will be grouped in Solution Folders based on their name."), m_ProjectConfig.groupProjectsByName);
       if (groupProjectsByName != m_ProjectConfig.groupProjectsByName)
       {
@@ -148,6 +150,11 @@ namespace Packages.Rider.Editor
         EditorGUI.indentLevel--;
       }
 
+      EditorGUILayout.Space();
+      
+      EditorGUILayout.LabelField("Generate .csproj files for:");
+      EditorGUI.indentLevel++;
+      
       SettingsButton(ProjectGenerationFlag.Embedded, "Embedded packages", "");
       SettingsButton(ProjectGenerationFlag.Local, "Local packages", "");
       SettingsButton(ProjectGenerationFlag.Registry, "Registry packages", "");
