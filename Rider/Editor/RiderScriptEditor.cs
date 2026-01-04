@@ -24,6 +24,7 @@ namespace Packages.Rider.Editor
     private static RiderScriptEditor m_RiderScriptEditor;
     private static GUIStyle m_InfoLabelStyle => new GUIStyle("ControlLabel") { wordWrap = true };
     private static bool m_PlatformsFoldout = false;
+    private static bool m_GeneralSettingsFoldout = true;
     private static RiderProjectConfig m_ProjectConfig;
     private static UnityEditorInternal.ReorderableList m_CustomProjectsList;
     private static bool m_HasPendingChanges;
@@ -33,8 +34,8 @@ namespace Packages.Rider.Editor
       try
       {
         // todo: make ProjectGeneration lazy
-        var projectGeneration = new ProjectGeneration.ProjectGeneration();
-        m_RiderScriptEditor = new RiderScriptEditor(new Discovery(), projectGeneration);
+        UpdateGenerator();
+        m_RiderScriptEditor = new RiderScriptEditor(new Discovery(), m_ProjectGeneration);
         // preserve the order here, otherwise on startup, project generation Sync would happen multiple times
         CodeEditor.Register(m_RiderScriptEditor);
         InitializeInternal(CurrentEditor);
@@ -43,6 +44,22 @@ namespace Packages.Rider.Editor
       catch (Exception e)
       {
         Debug.LogException(e);
+      }
+    }
+
+    private static void UpdateGenerator()
+    {
+      if (m_ProjectConfig == null)
+        m_ProjectConfig = RiderProjectConfigStorage.Load();
+
+      var projectDirectory = Directory.GetParent(Application.dataPath).FullName;
+      if (m_ProjectConfig.useSLNX && m_ProjectGeneration is not ProjectGenerationSLNX)
+      {
+        m_ProjectGeneration = new ProjectGenerationSLNX(projectDirectory, new AssemblyNameProvider(), new FileIOProvider(), new GUIDProvider());
+      }
+      else if (!m_ProjectConfig.useSLNX && m_ProjectGeneration is not ProjectGenerationSLN)
+      {
+        m_ProjectGeneration = new ProjectGenerationSLN(projectDirectory, new AssemblyNameProvider(), new FileIOProvider(), new GUIDProvider());
       }
     }
 
@@ -128,22 +145,45 @@ namespace Packages.Rider.Editor
       
       if (m_ProjectConfig == null)
         m_ProjectConfig = RiderProjectConfigStorage.Load();
-      
-      var groupProjectsByName = EditorGUILayout.Toggle(new GUIContent("Group projects by name", "If enabled, projects will be grouped in Solution Folders based on their name."), m_ProjectConfig.groupProjectsByName);
-      if (groupProjectsByName != m_ProjectConfig.groupProjectsByName)
-      {
-        m_ProjectConfig.groupProjectsByName = groupProjectsByName;
-        RiderProjectConfigStorage.Save(m_ProjectConfig);
-        m_HasPendingChanges = true;
-      }
 
-      if (groupProjectsByName)
+      m_GeneralSettingsFoldout = EditorGUILayout.Foldout(m_GeneralSettingsFoldout, "General Settings");
+      if (m_GeneralSettingsFoldout)
       {
         EditorGUI.indentLevel++;
-        var groupProjectsByNameDepth = EditorGUILayout.IntField(new GUIContent("Grouping depth", "The depth of the grouping. 1 will group 'Company.Feature.A' under 'Company', 2 will group it under 'Company.Feature'."), m_ProjectConfig.groupProjectsByNameDepth);
-        if (groupProjectsByNameDepth != m_ProjectConfig.groupProjectsByNameDepth)
+        var useSLNX = EditorGUILayout.Toggle(new GUIContent("Use SLNX", "Use SLNX format for the solution file."), m_ProjectConfig.useSLNX);
+        if (useSLNX != m_ProjectConfig.useSLNX)
         {
-          m_ProjectConfig.groupProjectsByNameDepth = groupProjectsByNameDepth;
+          m_ProjectConfig.useSLNX = useSLNX;
+          RiderProjectConfigStorage.Save(m_ProjectConfig);
+          UpdateGenerator();
+          m_HasPendingChanges = true;
+        }
+
+        var groupProjectsByName = EditorGUILayout.Toggle(new GUIContent("Group projects by name", "If enabled, projects will be grouped in Solution Folders based on their name."), m_ProjectConfig.groupProjectsByName);
+        if (groupProjectsByName != m_ProjectConfig.groupProjectsByName)
+        {
+          m_ProjectConfig.groupProjectsByName = groupProjectsByName;
+          RiderProjectConfigStorage.Save(m_ProjectConfig);
+          m_HasPendingChanges = true;
+        }
+
+        if (groupProjectsByName)
+        {
+          EditorGUI.indentLevel++;
+          var groupProjectsByNameDepth = EditorGUILayout.IntField(new GUIContent("Grouping depth", "The depth of the grouping. 1 will group 'Company.Feature.A' under 'Company', 2 will group it under 'Company.Feature'."), m_ProjectConfig.groupProjectsByNameDepth);
+          if (groupProjectsByNameDepth != m_ProjectConfig.groupProjectsByNameDepth)
+          {
+            m_ProjectConfig.groupProjectsByNameDepth = groupProjectsByNameDepth;
+            RiderProjectConfigStorage.Save(m_ProjectConfig);
+            m_HasPendingChanges = true;
+          }
+          EditorGUI.indentLevel--;
+        }
+
+        var cleanupProjects = EditorGUILayout.Toggle(new GUIContent("Cleanup projects", "If enabled, all .csproj and .sln/.slnx files will be deleted before generating a new solution."), m_ProjectConfig.cleanupProjects);
+        if (cleanupProjects != m_ProjectConfig.cleanupProjects)
+        {
+          m_ProjectConfig.cleanupProjects = cleanupProjects;
           RiderProjectConfigStorage.Save(m_ProjectConfig);
           m_HasPendingChanges = true;
         }
@@ -436,7 +476,7 @@ namespace Packages.Rider.Editor
 
     public bool OpenProject(string path, int line, int column)
     {
-      var projectGeneration = (ProjectGeneration.ProjectGeneration) m_ProjectGeneration;
+      var projectGeneration = (ProjectGenerationBase) m_ProjectGeneration;
       // Assets - Open C# Project passes empty path here
       if (path != "" && !projectGeneration.HasValidExtension(path))
       {

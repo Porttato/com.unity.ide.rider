@@ -11,7 +11,7 @@ using UnityEngine;
 
 namespace Packages.Rider.Editor.ProjectGeneration
 {
-  internal class ProjectGeneration : IGenerator
+  internal abstract class ProjectGenerationBase : IGenerator
   {
     private enum ScriptingLanguage
     {
@@ -45,36 +45,30 @@ namespace Packages.Rider.Editor.ProjectGeneration
         { ".ttinclude", ScriptingLanguage.None}
       };
 
-    private string[] m_ProjectSupportedExtensions = Array.Empty<string>();
+    protected string[] m_ProjectSupportedExtensions = Array.Empty<string>();
 
     // Note that ProjectDirectory can be assumed to be the result of Path.GetFullPath
     public string ProjectDirectory { get; }
     public string ProjectDirectoryWithSlash { get; }
 
-    private readonly string m_ProjectName;
-    private readonly IAssemblyNameProvider m_AssemblyNameProvider;
-    private readonly IFileIO m_FileIOProvider;
-    private readonly IGUIDGenerator m_GUIDGenerator;
+    protected readonly string m_ProjectName;
+    protected readonly IAssemblyNameProvider m_AssemblyNameProvider;
+    protected readonly IFileIO m_FileIOProvider;
+    protected readonly IGUIDGenerator m_GUIDGenerator;
 
-    private readonly Dictionary<string, string> m_ProjectGuids = new Dictionary<string, string>();
-    private readonly Dictionary<string, string> m_SolutionFolderGuids = new Dictionary<string, string>();
+    protected readonly Dictionary<string, string> m_ProjectGuids = new Dictionary<string, string>();
+    protected readonly Dictionary<string, string> m_SolutionFolderGuids = new Dictionary<string, string>();
 
     // If we have multiple projects, the same assembly references are reused for each. Caching the normalised paths and
     // names is actually cheaper than recalculating each time, in terms of both time and memory allocations
-    private readonly Dictionary<string, string> m_NormalisedPaths = new Dictionary<string, string>();
-    private readonly Dictionary<string, string> m_AssemblyNames = new Dictionary<string, string>();
+    protected readonly Dictionary<string, string> m_NormalisedPaths = new Dictionary<string, string>();
+    protected readonly Dictionary<string, string> m_AssemblyNames = new Dictionary<string, string>();
 
     internal static bool isRiderProjectGeneration; // workaround to https://github.cds.internal.unity3d.com/unity/com.unity.ide.rider/issues/28
 
     IAssemblyNameProvider IGenerator.AssemblyNameProvider => m_AssemblyNameProvider;
 
-    public ProjectGeneration()
-      : this(Directory.GetParent(Application.dataPath).FullName) { }
-
-    public ProjectGeneration(string projectDirectory)
-      : this(projectDirectory, new AssemblyNameProvider(), new FileIOProvider(), new GUIDProvider()) { }
-
-    public ProjectGeneration(string projectDirectory, IAssemblyNameProvider assemblyNameProvider, IFileIO fileIoProvider, IGUIDGenerator guidGenerator)
+    protected ProjectGenerationBase(string projectDirectory, IAssemblyNameProvider assemblyNameProvider, IFileIO fileIoProvider, IGUIDGenerator guidGenerator)
     {
       ProjectDirectory = Path.GetFullPath(projectDirectory.NormalizePath());
       ProjectDirectoryWithSlash = ProjectDirectory + Path.DirectorySeparatorChar;
@@ -140,6 +134,35 @@ namespace Packages.Rider.Editor.ProjectGeneration
 
     public void Sync()
     {
+      var config = RiderProjectConfigStorage.Load();
+      if (config.cleanupProjects)
+      {
+        try
+        {
+          var projectFiles = Directory.GetFiles(ProjectDirectory, "*.csproj");
+          foreach (var file in projectFiles)
+          {
+            File.Delete(file);
+          }
+
+          var slnFiles = Directory.GetFiles(ProjectDirectory, "*.sln");
+          foreach (var file in slnFiles)
+          {
+            File.Delete(file);
+          }
+
+          var slnxFiles = Directory.GetFiles(ProjectDirectory, "*.slnx");
+          foreach (var file in slnxFiles)
+          {
+            File.Delete(file);
+          }
+        }
+        catch (Exception e)
+        {
+          Debug.LogError($"Failed to cleanup project files: {e.Message}");
+        }
+      }
+
       SetupSupportedExtensions();
       var types = GetAssetPostprocessorTypes();
       isRiderProjectGeneration = true;
@@ -165,7 +188,7 @@ namespace Packages.Rider.Editor.ProjectGeneration
       return m_FileIOProvider.Exists(SolutionFile());
     }
 
-    private void SetupSupportedExtensions()
+    protected void SetupSupportedExtensions()
     {
       var extensions = m_AssemblyNameProvider.ProjectSupportedExtensions;
       m_ProjectSupportedExtensions = new string[extensions.Length];
@@ -175,7 +198,7 @@ namespace Packages.Rider.Editor.ProjectGeneration
       }
     }
 
-    private bool ShouldFileBePartOfSolution(string file)
+    protected bool ShouldFileBePartOfSolution(string file)
     {
       // Exclude files coming from packages except if they are internalized.
       if (m_AssemblyNameProvider.IsInternalizedPackagePath(file))
@@ -200,7 +223,7 @@ namespace Packages.Rider.Editor.ProjectGeneration
       return k_BuiltinSupportedExtensions.ContainsKey(extension) || m_ProjectSupportedExtensions.Contains(extension);
     }
 
-    private class AssemblyUsage
+    protected class AssemblyUsage
     {
       private readonly HashSet<string> m_ProjectAssemblies = new HashSet<string>();
       private readonly HashSet<string> m_PrecompiledAssemblies = new HashSet<string>();
@@ -353,7 +376,7 @@ namespace Packages.Rider.Editor.ProjectGeneration
       // Rider package assembly
       // TODO: Would this produce the same results if we removed the check for ShouldFileBePartOfSolution above?
       // I suspect the only difference would be output path and references, and potentially simplify things
-      var executingAssemblyName = typeof(ProjectGeneration).Assembly.GetName().Name;
+      var executingAssemblyName = typeof(ProjectGenerationBase).Assembly.GetName().Name;
       var riderAssembly = m_AssemblyNameProvider.GetNamedAssembly(executingAssemblyName);
       string[] coreReferences = null;
       foreach (var pair in additionalAssetsByAssembly)
@@ -526,7 +549,7 @@ namespace Packages.Rider.Editor.ProjectGeneration
       SyncFileIfNotChanged(path, newContents);
     }
 
-    private void SyncSolutionFileIfNotChanged(string path, string newContents, Type[] types)
+    protected virtual void SyncSolutionFileIfNotChanged(string path, string newContents, Type[] types)
     {
       newContents = OnGeneratedSlnSolution(path, newContents, types);
 
@@ -603,7 +626,7 @@ namespace Packages.Rider.Editor.ProjectGeneration
       return content;
     }
 
-    private static string OnGeneratedSlnSolution(string path, string content, Type[] types)
+    protected static string OnGeneratedSlnSolution(string path, string content, Type[] types)
     {
       foreach (var type in types)
       {
@@ -626,7 +649,7 @@ namespace Packages.Rider.Editor.ProjectGeneration
       return content;
     }
 
-    private void SyncFileIfNotChanged(string path, string newContents)
+    protected void SyncFileIfNotChanged(string path, string newContents)
     {
       if (HasChanged(path, newContents))
         m_FileIOProvider.WriteAllText(path, newContents);
@@ -748,10 +771,7 @@ namespace Packages.Rider.Editor.ProjectGeneration
       return Path.Combine(ProjectDirectory, $"{m_AssemblyNameProvider.GetProjectName(projectPart.Name, projectPart.Defines)}.csproj");
     }
 
-    public string SolutionFile()
-    {
-      return Path.Combine(ProjectDirectory, $"{m_ProjectName}.sln");
-    }
+    public abstract string SolutionFile();
 
     private void ProjectHeader(StringBuilder stringBuilder, ProjectPart assembly, List<ResponseFileData> responseFilesData)
     {
@@ -953,172 +973,7 @@ namespace Packages.Rider.Editor.ProjectGeneration
         stringBuilder.Append("    <WarningsNotAsErrors>").CompatibleAppendJoin(';', notWarningIds) .AppendLine("</WarningsNotAsErrors>");
     }
 
-    private void SyncSolution(StringBuilder stringBuilder, List<ProjectPart> islands, Type[] types)
-    {
-      SyncSolutionFileIfNotChanged(SolutionFile(), SolutionText(stringBuilder, islands), types);
-    }
-
-    private string SolutionText(StringBuilder stringBuilder, List<ProjectPart> islands)
-    {
-      stringBuilder
-        .AppendLine()
-        .AppendLine("Microsoft Visual Studio Solution File, Format Version 11.00")
-        .AppendLine("# Visual Studio 2010");
-
-      var config = RiderProjectConfigStorage.Load();
-      var solutionFolders = new HashSet<string>();
-      var solutionFolderProjectsCount = new Dictionary<string, int>();
-      var islandFolders = new Dictionary<string, string>(); // island name -> folder path
-
-      foreach (var island in islands)
-      {
-        var folder = island.SolutionFolder;
-        if (config.groupProjectsByName)
-        {
-          var parts = island.Name.Split('.');
-          if (parts.Length > 0 && (parts[0].Equals("com", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("net", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("org", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("pl", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("de", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("uk", StringComparison.OrdinalIgnoreCase)))
-          {
-            parts = parts.Skip(1).ToArray();
-          }
-
-          if (parts.Length > config.groupProjectsByNameDepth)
-          {
-            var folderParts = new string[config.groupProjectsByNameDepth];
-            Array.Copy(parts, folderParts, config.groupProjectsByNameDepth);
-            folder = string.Join(".", folderParts);
-          }
-          else if (parts.Length > 1)
-          {
-             var length = parts.Length - 1;
-             if (config.groupProjectsByNameDepth > 0)
-               length = Math.Min(length, config.groupProjectsByNameDepth);
-
-             folder = string.Join(".", parts.Take(length));
-          }
-        }
-
-        if (!string.IsNullOrEmpty(folder))
-        {
-          islandFolders[island.Name] = folder;
-
-          // Add all parent folders
-          var currentFolder = folder;
-          while (!string.IsNullOrEmpty(currentFolder))
-          {
-            solutionFolders.Add(currentFolder);
-            if (!solutionFolderProjectsCount.ContainsKey(currentFolder))
-              solutionFolderProjectsCount[currentFolder] = 0;
-            solutionFolderProjectsCount[currentFolder]++;
-
-            var lastDot = currentFolder.LastIndexOf('.');
-            if (lastDot > 0)
-              currentFolder = currentFolder.Substring(0, lastDot);
-            else
-              break;
-          }
-        }
-      }
-
-      foreach (var folder in solutionFolders)
-      {
-        if (!config.groupProjectsByName && solutionFolderProjectsCount[folder] < 2) continue; // Keep old behavior for variant grouping
-
-        stringBuilder
-          .Append("Project(\"{2150E333-8FDC-42A3-9474-1A3956D46DE8}\") = \"")
-          .Append(Path.GetFileName(folder.Replace('.', '/'))) // Visual name
-          .Append("\", \"")
-          .Append(Path.GetFileName(folder.Replace('.', '/'))) // Folder path
-          .Append("\", \"{")
-          .Append(SolutionFolderGuid(folder))
-          .AppendLine("}\"")
-          .AppendLine("EndProject");
-      }
-
-      foreach (var island in islands)
-      {
-        var projectName = m_AssemblyNameProvider.GetProjectName(island.Name, island.Defines);
-
-        // GUID is for C# class libraries
-        stringBuilder
-          .Append("Project(\"{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}\") = \"")
-          .Append(projectName)
-          .Append("\", \"")
-          .Append(projectName)
-          .Append(".csproj\", \"{")
-          .Append(ProjectGuid(projectName))
-          .AppendLine("}\"")
-          .AppendLine("EndProject");
-      }
-
-      stringBuilder.AppendLine("Global")
-        .AppendLine("\tGlobalSection(SolutionConfigurationPlatforms) = preSolution")
-        .AppendLine("\t\tDebug|Any CPU = Debug|Any CPU")
-        .AppendLine("\tEndGlobalSection")
-        .AppendLine("\tGlobalSection(ProjectConfigurationPlatforms) = postSolution");
-
-      foreach (var island in islands)
-      {
-        var projectGuid = ProjectGuid(m_AssemblyNameProvider.GetProjectName(island.Name, island.Defines));
-
-        stringBuilder
-          .Append("\t\t{").Append(projectGuid).AppendLine("}.Debug|Any CPU.ActiveCfg = Debug|Any CPU")
-          .Append("\t\t{").Append(projectGuid).AppendLine("}.Debug|Any CPU.Build.0 = Debug|Any CPU");
-      }
-
-      stringBuilder.AppendLine("\tEndGlobalSection")
-        .AppendLine("\tGlobalSection(SolutionProperties) = preSolution")
-        .AppendLine("\t\tHideSolutionNode = FALSE")
-        .AppendLine("\tEndGlobalSection");
-
-      if (solutionFolders.Count > 0)
-      {
-        stringBuilder.AppendLine("\tGlobalSection(NestedProjects) = preSolution");
-
-        // Map projects to folders
-        foreach (var island in islands)
-        {
-          if (islandFolders.TryGetValue(island.Name, out var folder))
-          {
-             if (!config.groupProjectsByName && solutionFolderProjectsCount[folder] < 2) continue;
-
-             var projectName = m_AssemblyNameProvider.GetProjectName(island.Name, island.Defines);
-             stringBuilder
-              .Append("\t\t{")
-              .Append(ProjectGuid(projectName))
-              .Append("} = {")
-              .Append(SolutionFolderGuid(folder))
-              .AppendLine("}");
-          }
-        }
-
-        // Map folders to parents
-        foreach (var folder in solutionFolders)
-        {
-           var lastDot = folder.LastIndexOf('.');
-           if (lastDot > 0)
-           {
-             var parent = folder.Substring(0, lastDot);
-             if (solutionFolders.Contains(parent))
-             {
-               if (!config.groupProjectsByName && solutionFolderProjectsCount[parent] < 2) continue; // Heuristic check
-
-               stringBuilder
-                .Append("\t\t{")
-                .Append(SolutionFolderGuid(folder))
-                .Append("} = {")
-                .Append(SolutionFolderGuid(parent))
-                .AppendLine("}");
-             }
-           }
-        }
-
-        stringBuilder.AppendLine("\tEndGlobalSection");
-      }
-
-      stringBuilder.AppendLine("EndGlobal");
-
-      return stringBuilder.ToString();
-    }
+    protected abstract void SyncSolution(StringBuilder stringBuilder, List<ProjectPart> islands, Type[] types);
 
     private static ILookup<string, string> GetOtherArgumentsFromResponseFilesData(List<ResponseFileData> responseFilesData)
     {
@@ -1188,7 +1043,7 @@ namespace Packages.Rider.Editor.ProjectGeneration
       return codes.Distinct();
     }
 
-    private string ProjectGuid(string name)
+    protected string ProjectGuid(string name)
     {
       if (!m_ProjectGuids.TryGetValue(name, out var guid))
       {
@@ -1199,7 +1054,7 @@ namespace Packages.Rider.Editor.ProjectGeneration
       return guid;
     }
 
-    private string SolutionFolderGuid(string name)
+    protected string SolutionFolderGuid(string name)
     {
       if (!m_SolutionFolderGuids.TryGetValue(name, out var guid))
       {

@@ -9,7 +9,7 @@ namespace Packages.Rider.Editor.PostProcessors
     {
       var path = RiderScriptEditor.GetEditorRealPath(CodeEditor.CurrentEditorInstallation);
       if (RiderScriptEditor.IsRiderOrFleetInstallation(path))
-        return !ProjectGeneration.ProjectGeneration.isRiderProjectGeneration;
+        return !ProjectGeneration.ProjectGenerationBase.isRiderProjectGeneration;
       return false;
     }
   }

@@ -12,6 +12,8 @@ namespace Packages.Rider.Editor.ProjectGeneration
     public List<CustomProjectConfig> customProjects = new List<CustomProjectConfig>();
     public bool groupProjectsByName = true;
     public int groupProjectsByNameDepth = 2;
+    public bool useSLNX = false;
+    public bool cleanupProjects = false;
   }
 
   [Serializable]
