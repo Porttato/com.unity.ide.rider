@@ -23,6 +23,10 @@ namespace Packages.Rider.Editor
     private RiderInitializer m_Initiliazer = new RiderInitializer();
     private static RiderScriptEditor m_RiderScriptEditor;
     private static GUIStyle m_InfoLabelStyle => new GUIStyle("ControlLabel") { wordWrap = true };
+    private static bool m_PlatformsFoldout = false;
+    private static RiderProjectConfig m_ProjectConfig;
+    private static UnityEditorInternal.ReorderableList m_CustomProjectsList;
+    private static bool m_HasPendingChanges;
 
     static RiderScriptEditor()
     {
@@ -122,6 +126,28 @@ namespace Packages.Rider.Editor
 
       EditorGUILayout.LabelField("Generate .csproj files for:");
       EditorGUI.indentLevel++;
+
+      var groupProjectsByName = EditorGUILayout.Toggle(new GUIContent("Group projects by name", "If enabled, projects will be grouped in Solution Folders based on their name."), m_ProjectConfig.groupProjectsByName);
+      if (groupProjectsByName != m_ProjectConfig.groupProjectsByName)
+      {
+        m_ProjectConfig.groupProjectsByName = groupProjectsByName;
+        RiderProjectConfigStorage.Save(m_ProjectConfig);
+        m_HasPendingChanges = true;
+      }
+
+      if (groupProjectsByName)
+      {
+        EditorGUI.indentLevel++;
+        var groupProjectsByNameDepth = EditorGUILayout.IntField(new GUIContent("Grouping depth", "The depth of the grouping. 1 will group 'Company.Feature.A' under 'Company', 2 will group it under 'Company.Feature'."), m_ProjectConfig.groupProjectsByNameDepth);
+        if (groupProjectsByNameDepth != m_ProjectConfig.groupProjectsByNameDepth)
+        {
+          m_ProjectConfig.groupProjectsByNameDepth = groupProjectsByNameDepth;
+          RiderProjectConfigStorage.Save(m_ProjectConfig);
+          m_HasPendingChanges = true;
+        }
+        EditorGUI.indentLevel--;
+      }
+
       SettingsButton(ProjectGenerationFlag.Embedded, "Embedded packages", "");
       SettingsButton(ProjectGenerationFlag.Local, "Local packages", "");
       SettingsButton(ProjectGenerationFlag.Registry, "Registry packages", "");
@@ -132,6 +158,99 @@ namespace Packages.Rider.Editor
 #endif
       SettingsButton(ProjectGenerationFlag.Unknown, "Packages from unknown sources", "");
       SettingsButton(ProjectGenerationFlag.PlayerAssemblies, "Player projects", "For each player project generate an additional csproj with the name 'project-player.csproj'");
+
+      m_PlatformsFoldout = EditorGUILayout.Foldout(m_PlatformsFoldout, "Platforms");
+      if (m_PlatformsFoldout)
+      {
+        EditorGUI.indentLevel++;
+        var platformsChanged = false;
+        foreach (var platform in m_ProjectConfig.platforms)
+        {
+          EditorGUILayout.BeginHorizontal();
+          var newEnabled = EditorGUILayout.ToggleLeft(platform.name, platform.enabled, GUILayout.Width(120));
+          if (newEnabled != platform.enabled)
+          {
+            platform.enabled = newEnabled;
+            platformsChanged = true;
+          }
+
+          if (platform.enabled)
+          {
+            var newDefines = EditorGUILayout.DelayedTextField(platform.defines);
+            if (newDefines != platform.defines)
+            {
+              platform.defines = newDefines;
+              platformsChanged = true;
+            }
+          }
+          EditorGUILayout.EndHorizontal();
+        }
+
+        if (platformsChanged)
+        {
+          RiderProjectConfigStorage.Save(m_ProjectConfig);
+          m_HasPendingChanges = true;
+        }
+        EditorGUI.indentLevel--;
+      }
+
+      if (m_CustomProjectsList == null)
+      {
+        m_CustomProjectsList = new UnityEditorInternal.ReorderableList(m_ProjectConfig.customProjects, typeof(CustomProjectConfig), true, true, true, true);
+        m_CustomProjectsList.drawHeaderCallback = (rect) =>
+        {
+          EditorGUI.LabelField(rect, "Custom Projects");
+        };
+        m_CustomProjectsList.drawElementCallback = (rect, index, isActive, isFocused) =>
+        {
+          var element = m_ProjectConfig.customProjects[index];
+          rect.y += 2;
+          var enabledWidth = 20f;
+          var nameWidth = (rect.width - enabledWidth) * 0.3f;
+          var definesWidth = (rect.width - enabledWidth) * 0.7f - 10;
+
+          var newEnabled = EditorGUI.Toggle(new Rect(rect.x, rect.y, enabledWidth, EditorGUIUtility.singleLineHeight), element.enabled);
+          if (newEnabled != element.enabled)
+          {
+            element.enabled = newEnabled;
+            RiderProjectConfigStorage.Save(m_ProjectConfig);
+            m_HasPendingChanges = true;
+          }
+
+          EditorGUI.LabelField(new Rect(rect.x + enabledWidth, rect.y, 40, EditorGUIUtility.singleLineHeight), "Name:");
+          var newName = EditorGUI.DelayedTextField(new Rect(rect.x + enabledWidth + 45, rect.y, nameWidth - 45, EditorGUIUtility.singleLineHeight), element.name);
+          if (newName != element.name)
+          {
+            element.name = newName;
+            RiderProjectConfigStorage.Save(m_ProjectConfig);
+            m_HasPendingChanges = true;
+          }
+
+          EditorGUI.LabelField(new Rect(rect.x + enabledWidth + nameWidth + 10, rect.y, 50, EditorGUIUtility.singleLineHeight), "Defines:");
+          var newDefines = EditorGUI.DelayedTextField(new Rect(rect.x + enabledWidth + nameWidth + 65, rect.y, definesWidth - 65, EditorGUIUtility.singleLineHeight), element.defines);
+          if (newDefines != element.defines)
+          {
+            element.defines = newDefines;
+            RiderProjectConfigStorage.Save(m_ProjectConfig);
+            m_HasPendingChanges = true;
+          }
+        };
+        m_CustomProjectsList.onAddCallback = (list) =>
+        {
+          m_ProjectConfig.customProjects.Add(new CustomProjectConfig { name = "NewProject", defines = "CUSTOM_DEFINE", enabled = true });
+          RiderProjectConfigStorage.Save(m_ProjectConfig);
+          m_HasPendingChanges = true;
+        };
+        m_CustomProjectsList.onRemoveCallback = (list) =>
+        {
+          m_ProjectConfig.customProjects.RemoveAt(list.index);
+          RiderProjectConfigStorage.Save(m_ProjectConfig);
+          m_HasPendingChanges = true;
+        };
+      }
+
+      m_CustomProjectsList.DoLayoutList();
+
       RegenerateProjectFiles();
       EditorGUI.indentLevel--;
     }
@@ -140,10 +259,14 @@ namespace Packages.Rider.Editor
     {
       var rect = EditorGUI.IndentedRect(EditorGUILayout.GetControlRect(new GUILayoutOption[] {}));
       rect.width = 252;
+      var color = GUI.backgroundColor;
+      if (m_HasPendingChanges) GUI.backgroundColor = Color.red;
       if (GUI.Button(rect, "Regenerate project files"))
       {
         m_ProjectGeneration.Sync();
+        m_HasPendingChanges = false;
       }
+      GUI.backgroundColor = color;
     }
 
     private void SettingsButton(ProjectGenerationFlag preference, string guiMessage, string toolTip)

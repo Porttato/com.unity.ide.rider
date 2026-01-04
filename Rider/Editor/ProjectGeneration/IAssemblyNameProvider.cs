@@ -15,6 +15,7 @@ namespace Packages.Rider.Editor.ProjectGeneration
     string GetProjectName(string name, string[] defines);
     bool IsInternalizedPackagePath(string path);
     Assembly[] GetAllAssemblies();
+    Assembly[] GetPlayerAssemblies();
     Assembly GetNamedAssembly(string name);
     IEnumerable<string> GetAllAssetPaths();
     UnityEditor.PackageManager.PackageInfo GetPackageInfoForAssetPath(string assetPath);

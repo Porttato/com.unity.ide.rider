@@ -17,10 +17,12 @@ namespace Packages.Rider.Editor.ProjectGeneration
     public string[] CompiledAssemblyReferences { get; }
     public string[] Defines { get; }
     public ScriptCompilerOptions CompilerOptions { get; }
+    public string SolutionFolder { get; }
 
-    public ProjectPart(string name, Assembly assembly, List<string> additionalAssets)
+    public ProjectPart(string name, Assembly assembly, List<string> additionalAssets, string solutionFolder = "")
     {
       Name = name;
+      SolutionFolder = solutionFolder;
       Assembly = assembly;
       AdditionalAssets = additionalAssets;
       OutputPath = assembly != null ? assembly.outputPath : "Temp/Bin/Debug";

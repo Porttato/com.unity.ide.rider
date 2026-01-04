@@ -62,6 +62,16 @@ namespace Packages.Rider.Editor.ProjectGeneration
       return m_AllAssemblies;
     }
 
+    public Assembly[] GetPlayerAssemblies()
+    {
+      if (m_AllPlayerAssemblies == null)
+      {
+        m_AllPlayerAssemblies = GetAssembliesByType(AssembliesType.Player);
+      }
+
+      return m_AllPlayerAssemblies;
+    }
+
     private static Assembly[] GetAssembliesByType(AssembliesType type)
     {
       // This is a very expensive Unity call...

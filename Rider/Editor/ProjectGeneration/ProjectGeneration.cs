@@ -57,6 +57,7 @@ namespace Packages.Rider.Editor.ProjectGeneration
     private readonly IGUIDGenerator m_GUIDGenerator;
 
     private readonly Dictionary<string, string> m_ProjectGuids = new Dictionary<string, string>();
+    private readonly Dictionary<string, string> m_SolutionFolderGuids = new Dictionary<string, string>();
 
     // If we have multiple projects, the same assembly references are reused for each. Caching the normalised paths and
     // names is actually cheaper than recalculating each time, in terms of both time and memory allocations
@@ -253,12 +254,97 @@ namespace Packages.Rider.Editor.ProjectGeneration
 
         // TODO: Will this check ever be true? Player assemblies don't have the same name as editor assemblies, right?
         if (assemblyNamesWithSource.Contains(assembly.name))
-          projectParts.Add(new ProjectPart(assembly.name, assembly, new List<string>())); // do not add asset project parts to both editor and player projects
+          projectParts.Add(new ProjectPart(assembly.name, assembly, new List<string>(), assembly.name)); // do not add asset project parts to both editor and player projects
         else
         {
           additionalAssetsByAssembly.TryGetValue(assembly.name, out var additionalAssetsForProject);
-          projectParts.Add(new ProjectPart(assembly.name, assembly, additionalAssetsForProject));
+          projectParts.Add(new ProjectPart(assembly.name, assembly, additionalAssetsForProject, assembly.name));
           assemblyNamesWithSource.Add(assembly.name);
+        }
+      }
+
+      var riderProjectConfig = RiderProjectConfigStorage.Load();
+      var generatedVariants = new HashSet<string>();
+
+      // Use Player assemblies as the base for platform/custom variants to ensure a clean slate (no EDITOR defines/references)
+      var playerAssemblies = m_AssemblyNameProvider.GetPlayerAssemblies();
+
+      foreach (var assembly in playerAssemblies)
+      {
+        if (!assembly.sourceFiles.Any(ShouldFileBePartOfSolution))
+          continue;
+
+        // RIDER-104519: skip platform and custom projects for assemblies starting with "Unity."
+        // to avoid access errors to internal members of other assemblies (e.g. UnityEngine.CoreModule)
+        // which haven't granted InternalsVisibleTo to our custom-named assemblies.
+        if (assembly.name.StartsWith("Unity.", StringComparison.Ordinal))
+          continue;
+
+        foreach (var platform in riderProjectConfig.platforms)
+        {
+          if (platform.enabled)
+          {
+            var newDefines = new List<string>(assembly.defines);
+            var standardPlatformDefines = new[]
+            {
+              "UNITY_STANDALONE", "UNITY_STANDALONE_WIN", "UNITY_STANDALONE_OSX", "UNITY_STANDALONE_LINUX",
+              "UNITY_ANDROID", "UNITY_IOS", "UNITY_PS4", "UNITY_PS5", "UNITY_XBOXONE", "UNITY_GAMECORE",
+              "UNITY_SWITCH", "UNITY_EDITOR", "UNITY_EDITOR_64", "UNITY_EDITOR_WIN", "UNITY_EDITOR_OSX", "UNITY_EDITOR_LINUX"
+            };
+
+            foreach (var def in standardPlatformDefines)
+            {
+              newDefines.Remove(def);
+            }
+
+            var userDefines = platform.defines.Split(new [] {';'}, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var def in userDefines)
+            {
+              if (def.StartsWith("-"))
+                newDefines.Remove(def.Substring(1));
+              else
+                newDefines.Add(def);
+            }
+
+            var newAssembly = new Assembly(assembly.name, assembly.outputPath, assembly.sourceFiles, newDefines.ToArray(),
+              assembly.assemblyReferences, assembly.compiledAssemblyReferences, assembly.flags
+#if UNITY_2020_2_OR_NEWER
+              , assembly.compilerOptions, assembly.rootNamespace
+#endif
+              );
+
+            var projectName = $"{assembly.name}.{platform.name}";
+            if (generatedVariants.Add(projectName))
+              projectParts.Add(new ProjectPart(projectName, newAssembly, new List<string>(), assembly.name));
+          }
+        }
+
+        foreach (var customProject in riderProjectConfig.customProjects)
+        {
+          if (!customProject.enabled)
+            continue;
+
+          var newDefines = new List<string>(assembly.defines);
+
+          var userDefines = customProject.defines.Split(new [] {';'}, StringSplitOptions.RemoveEmptyEntries);
+          foreach (var def in userDefines)
+          {
+            if (def.StartsWith("-"))
+              newDefines.Remove(def.Substring(1));
+            else
+              newDefines.Add(def);
+          }
+
+          var newAssembly = new Assembly(assembly.name, assembly.outputPath, assembly.sourceFiles, newDefines.ToArray(),
+            assembly.assemblyReferences, assembly.compiledAssemblyReferences, assembly.flags
+#if UNITY_2020_2_OR_NEWER
+            , assembly.compilerOptions, assembly.rootNamespace
+#endif
+          );
+
+          var projectName = $"{assembly.name}.{customProject.name}";
+          if (generatedVariants.Add(projectName))
+            projectParts.Add(new ProjectPart(projectName, newAssembly, new List<string>(), assembly.name));
         }
       }
 
@@ -878,6 +964,76 @@ namespace Packages.Rider.Editor.ProjectGeneration
         .AppendLine()
         .AppendLine("Microsoft Visual Studio Solution File, Format Version 11.00")
         .AppendLine("# Visual Studio 2010");
+
+      var config = RiderProjectConfigStorage.Load();
+      var solutionFolders = new HashSet<string>();
+      var solutionFolderProjectsCount = new Dictionary<string, int>();
+      var islandFolders = new Dictionary<string, string>(); // island name -> folder path
+
+      foreach (var island in islands)
+      {
+        var folder = island.SolutionFolder;
+        if (config.groupProjectsByName)
+        {
+          var parts = island.Name.Split('.');
+          if (parts.Length > 0 && (parts[0].Equals("com", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("net", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("org", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("pl", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("de", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("uk", StringComparison.OrdinalIgnoreCase)))
+          {
+            parts = parts.Skip(1).ToArray();
+          }
+
+          if (parts.Length > config.groupProjectsByNameDepth)
+          {
+            var folderParts = new string[config.groupProjectsByNameDepth];
+            Array.Copy(parts, folderParts, config.groupProjectsByNameDepth);
+            folder = string.Join(".", folderParts);
+          }
+          else if (parts.Length > 1)
+          {
+             var length = parts.Length - 1;
+             if (config.groupProjectsByNameDepth > 0)
+               length = Math.Min(length, config.groupProjectsByNameDepth);
+
+             folder = string.Join(".", parts.Take(length));
+          }
+        }
+
+        if (!string.IsNullOrEmpty(folder))
+        {
+          islandFolders[island.Name] = folder;
+
+          // Add all parent folders
+          var currentFolder = folder;
+          while (!string.IsNullOrEmpty(currentFolder))
+          {
+            solutionFolders.Add(currentFolder);
+            if (!solutionFolderProjectsCount.ContainsKey(currentFolder))
+              solutionFolderProjectsCount[currentFolder] = 0;
+            solutionFolderProjectsCount[currentFolder]++;
+
+            var lastDot = currentFolder.LastIndexOf('.');
+            if (lastDot > 0)
+              currentFolder = currentFolder.Substring(0, lastDot);
+            else
+              break;
+          }
+        }
+      }
+
+      foreach (var folder in solutionFolders)
+      {
+        if (!config.groupProjectsByName && solutionFolderProjectsCount[folder] < 2) continue; // Keep old behavior for variant grouping
+
+        stringBuilder
+          .Append("Project(\"{2150E333-8FDC-42A3-9474-1A3956D46DE8}\") = \"")
+          .Append(Path.GetFileName(folder.Replace('.', '/'))) // Visual name
+          .Append("\", \"")
+          .Append(Path.GetFileName(folder.Replace('.', '/'))) // Folder path
+          .Append("\", \"{")
+          .Append(SolutionFolderGuid(folder))
+          .AppendLine("}\"")
+          .AppendLine("EndProject");
+      }
+
       foreach (var island in islands)
       {
         var projectName = m_AssemblyNameProvider.GetProjectName(island.Name, island.Defines);
@@ -912,8 +1068,54 @@ namespace Packages.Rider.Editor.ProjectGeneration
       stringBuilder.AppendLine("\tEndGlobalSection")
         .AppendLine("\tGlobalSection(SolutionProperties) = preSolution")
         .AppendLine("\t\tHideSolutionNode = FALSE")
-        .AppendLine("\tEndGlobalSection")
-        .AppendLine("EndGlobal");
+        .AppendLine("\tEndGlobalSection");
+
+      if (solutionFolders.Count > 0)
+      {
+        stringBuilder.AppendLine("\tGlobalSection(NestedProjects) = preSolution");
+
+        // Map projects to folders
+        foreach (var island in islands)
+        {
+          if (islandFolders.TryGetValue(island.Name, out var folder))
+          {
+             if (!config.groupProjectsByName && solutionFolderProjectsCount[folder] < 2) continue;
+
+             var projectName = m_AssemblyNameProvider.GetProjectName(island.Name, island.Defines);
+             stringBuilder
+              .Append("\t\t{")
+              .Append(ProjectGuid(projectName))
+              .Append("} = {")
+              .Append(SolutionFolderGuid(folder))
+              .AppendLine("}");
+          }
+        }
+
+        // Map folders to parents
+        foreach (var folder in solutionFolders)
+        {
+           var lastDot = folder.LastIndexOf('.');
+           if (lastDot > 0)
+           {
+             var parent = folder.Substring(0, lastDot);
+             if (solutionFolders.Contains(parent))
+             {
+               if (!config.groupProjectsByName && solutionFolderProjectsCount[parent] < 2) continue; // Heuristic check
+
+               stringBuilder
+                .Append("\t\t{")
+                .Append(SolutionFolderGuid(folder))
+                .Append("} = {")
+                .Append(SolutionFolderGuid(parent))
+                .AppendLine("}");
+             }
+           }
+        }
+
+        stringBuilder.AppendLine("\tEndGlobalSection");
+      }
+
+      stringBuilder.AppendLine("EndGlobal");
 
       return stringBuilder.ToString();
     }
@@ -992,6 +1194,28 @@ namespace Packages.Rider.Editor.ProjectGeneration
       {
         guid = m_GUIDGenerator.ProjectGuid(m_ProjectName + name);
         m_ProjectGuids.Add(name, guid);
+      }
+
+      return guid;
+    }
+
+    private string SolutionFolderGuid(string name)
+    {
+      if (!m_SolutionFolderGuids.TryGetValue(name, out var guid))
+      {
+        guid = m_GUIDGenerator.ProjectGuid(m_ProjectName + "SolutionFolder:" + name);
+        m_SolutionFolderGuids.Add(name, guid);
+      }
+
+      return guid;
+    }
+
+    private string GetNormalisedAssemblyPath(string name)
+    {
+      if (!m_SolutionFolderGuids.TryGetValue(name, out var guid))
+      {
+        guid = m_GUIDGenerator.ProjectGuid(m_ProjectName + "SolutionFolder:" + name);
+        m_SolutionFolderGuids.Add(name, guid);
       }
 
       return guid;
