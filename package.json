@@ -1,13 +1,23 @@
 {
-  "name": "com.unity.ide.rider",
+  "name": "com.porttato.ide.rider",
   "displayName": "JetBrains Rider Editor",
   "description": "The JetBrains Rider Editor package provides an integration for using the JetBrains Rider IDE as a code editor for Unity. It adds support for generating .csproj files for code completion and auto-discovery of installations.",
-  "version": "3.0.40-custom",
+  "version": "3.0.40",
   "unity": "2021.3",
+  "keywords": [
+    "porttato"
+  ],
+  "author": {
+    "name": "Porttato",
+    "url": "http://www.porttato.com",
+    "email": "devops@porttato.com"
+  },
+  "category": "Libraries",
   "dependencies": {
     "com.unity.ext.nunit": "1.0.6"
   },
   "relatedPackages": {
+    "com.unity.ide.rider": "3.0.40",
     "com.unity.ide.rider.tests": "3.0.40"
   },
   "_upm": {
